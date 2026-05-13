@@ -135,10 +135,7 @@ $modules = [
                         <input class="form-check-input" type="checkbox" role="switch" name="pre_register_enabled" value="1" id="pre_register_enabled" <?= $registrationSettings['pre_register_enabled'] ? 'checked' : '' ?>>
                         <label class="form-check-label" for="pre_register_enabled">Show Pre-register</label>
                     </div>
-                    <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" role="switch" name="walk_in_enabled" value="1" id="walk_in_enabled" <?= $registrationSettings['walk_in_enabled'] ? 'checked' : '' ?>>
-                        <label class="form-check-label" for="walk_in_enabled">Show Walk-in Register</label>
-                    </div>
+                    <p class="small text-muted mb-3">Walk-in registration is always available on its own page.</p>
                     <button type="submit" class="btn btn-primary btn-sm">Save Registration Controls</button>
                 </form>
             </div>

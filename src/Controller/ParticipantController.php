@@ -134,13 +134,6 @@ class ParticipantController
         $title = 'Walk-in Registration';
         $registrationType = 'walk_in';
         $registrationSettings = SettingsController::loadRegistrationSettings(Container::get('db'));
-        if (!$registrationSettings['walk_in_enabled'] && !Auth::check()) {
-            $closedTitle = 'Walk-in registration is currently closed';
-            include __DIR__ . '/../../views/layout/header.php';
-            include __DIR__ . '/../../views/participants/registration_closed.php';
-            include __DIR__ . '/../../views/layout/footer.php';
-            return;
-        }
 
         include __DIR__ . '/../../views/layout/header.php';
         include __DIR__ . '/../../views/participants/walkin.php';
@@ -160,11 +153,6 @@ class ParticipantController
         $registrationSettings = SettingsController::loadRegistrationSettings($db);
         if (!Auth::check() && $registrationType === 'pre_register' && !$registrationSettings['pre_register_enabled']) {
             $_SESSION['registration_error'] = 'Pre-registration is currently closed. You can still use Find My QR if you already registered.';
-            header('Location: /participants/lookup');
-            exit;
-        }
-        if (!Auth::check() && $registrationType === 'walk_in' && !$registrationSettings['walk_in_enabled']) {
-            $_SESSION['registration_error'] = 'Walk-in registration is currently closed. You can still use Find My QR if you already registered.';
             header('Location: /participants/lookup');
             exit;
         }

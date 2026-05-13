@@ -221,7 +221,6 @@ class SettingsController
 
         $db = Container::get('db');
         $preRegisterEnabled = isset($_POST['pre_register_enabled']) ? 1 : 0;
-        $walkInEnabled = isset($_POST['walk_in_enabled']) ? 1 : 0;
 
         try {
             $db->exec('CREATE TABLE IF NOT EXISTS registration_settings (
@@ -233,12 +232,12 @@ class SettingsController
 
             $stmt = $db->prepare('
                 INSERT INTO registration_settings (id, pre_register_enabled, walk_in_enabled)
-                VALUES (1, ?, ?)
+                VALUES (1, ?, 1)
                 ON DUPLICATE KEY UPDATE
                     pre_register_enabled = VALUES(pre_register_enabled),
-                    walk_in_enabled = VALUES(walk_in_enabled)
+                    walk_in_enabled = 1
             ');
-            $stmt->execute([$preRegisterEnabled, $walkInEnabled]);
+            $stmt->execute([$preRegisterEnabled]);
 
             $_SESSION['registration_settings_message'] = 'Registration settings saved.';
             $_SESSION['registration_settings_message_type'] = 'success';
@@ -341,7 +340,7 @@ class SettingsController
             if ($row) {
                 return [
                     'pre_register_enabled' => (bool)$row['pre_register_enabled'],
-                    'walk_in_enabled' => (bool)$row['walk_in_enabled'],
+                    'walk_in_enabled' => true,
                 ];
             }
         } catch (\Exception $e) {

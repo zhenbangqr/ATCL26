@@ -15,11 +15,9 @@ if (isset($_SESSION['registration_error'])) {
             <a class="nav-link active" aria-current="page" href="/participants/create">Pre-register</a>
         </li>
     <?php endif; ?>
-    <?php if ($registrationSettings['walk_in_enabled'] || \App\Core\Auth::check()): ?>
-        <li class="nav-item">
-            <a class="nav-link" href="/participants/create-walkin">Walk-in Register</a>
-        </li>
-    <?php endif; ?>
+    <li class="nav-item">
+        <a class="nav-link" href="/participants/create-walkin">Walk-in Register</a>
+    </li>
     <li class="nav-item">
         <a class="nav-link" href="/participants/lookup">Find My QR</a>
     </li>
