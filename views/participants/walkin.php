@@ -1,5 +1,9 @@
 <?php
 // Walk-in registration form
+$errorMessage = $_SESSION['registration_error'] ?? null;
+if (isset($_SESSION['registration_error'])) {
+    unset($_SESSION['registration_error']);
+}
 ?>
 <ul class="nav nav-tabs mb-3">
     <li class="nav-item">
@@ -15,6 +19,13 @@
 
 <h2>Walk-in Participant Registration</h2>
 <p class="text-muted mb-3">Use this full form for on-the-spot participants.</p>
+
+<?php if ($errorMessage !== null): ?>
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <?= htmlspecialchars($errorMessage) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<?php endif; ?>
 
 <form method="post" action="/participants/store" class="mt-3">
     <input type="hidden" name="registration_type" value="walk_in">
@@ -39,7 +50,7 @@
             type="text"
             name="student_id"
             class="form-control"
-            placeholder="25WMR09999"
+            placeholder="e.g. 25WMR09999"
             pattern="^[0-9]{2}[A-Z]{3}[0-9]{5}$"
         >
     </div>
@@ -49,8 +60,9 @@
             type="email"
             name="student_email"
             class="form-control"
-            placeholder="liowzb-wm23@student.tarc.edu.my"
-            pattern="^[a-z0-9._%+-]+-?[a-z0-9._%+-]*@student\.tarc\.edu\.my$"
+            placeholder="e.g. liowzb-wm23@student.tarc.edu.my"
+            pattern="^[a-zA-Z0-9._%+-]+(?:-?[a-zA-Z0-9._%+-]+)*@student\.tarc\.edu\.my$"
+            title="Must end with @student.tarc.edu.my"
         >
     </div>
     <div class="mb-3">

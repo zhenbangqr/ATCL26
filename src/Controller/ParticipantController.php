@@ -32,9 +32,19 @@ class ParticipantController
         // Not checked in count
         $stats['not_checked_in'] = $stats['total'] - $stats['checked_in'];
         
-        // Groups count
-        $stmt = $db->query("SELECT COUNT(DISTINCT group_code) as count FROM participants WHERE group_code IS NOT NULL AND group_code != ''");
-        $stats['groups'] = (int)$stmt->fetch(\PDO::FETCH_ASSOC)['count'];
+        // Groups: configured shells if present, else distinct assignments
+        try {
+            $shellCount = (int)$db->query('SELECT COUNT(*) FROM event_groups')->fetchColumn();
+            if ($shellCount > 0) {
+                $stats['groups'] = $shellCount;
+            } else {
+                $stmt = $db->query("SELECT COUNT(DISTINCT group_code) as count FROM participants WHERE group_code IS NOT NULL AND group_code != ''");
+                $stats['groups'] = (int)$stmt->fetch(\PDO::FETCH_ASSOC)['count'];
+            }
+        } catch (\Exception $e) {
+            $stmt = $db->query("SELECT COUNT(DISTINCT group_code) as count FROM participants WHERE group_code IS NOT NULL AND group_code != ''");
+            $stats['groups'] = (int)$stmt->fetch(\PDO::FETCH_ASSOC)['count'];
+        }
         
         // Faculty distribution
         $stmt = $db->query("SELECT faculty, COUNT(*) as count FROM participants GROUP BY faculty ORDER BY count DESC");
@@ -122,7 +132,47 @@ class ParticipantController
         $db = Container::get('db');
 
         $studentId = trim($_POST['student_id'] ?? '');
-        
+        $registrationType = strtolower(trim((string)($_POST['registration_type'] ?? 'pre_register')));
+        if (!in_array($registrationType, ['pre_register', 'walk_in'], true)) {
+            $registrationType = 'pre_register';
+        }
+
+        if ($registrationType === 'pre_register') {
+            $fullName = trim((string)($_POST['full_name'] ?? ''));
+            $gender = trim((string)($_POST['gender'] ?? ''));
+            $studentEmail = trim((string)($_POST['student_email'] ?? ''));
+            $programmeName = trim((string)($_POST['programme_name'] ?? ''));
+            $contactRaw = trim((string)($_POST['contact_no'] ?? ''));
+            $preferredLanguage = trim((string)($_POST['preferred_language'] ?? ''));
+
+            if (
+                $fullName === ''
+                || $gender === ''
+                || $studentId === ''
+                || $studentEmail === ''
+                || $programmeName === ''
+                || $contactRaw === ''
+                || $preferredLanguage === ''
+            ) {
+                $_SESSION['registration_error'] = 'Please complete every field on the form.';
+                header('Location: /participants/create');
+                exit;
+            }
+
+            if (!$this->isValidTarcStudentEmail($studentEmail)) {
+                $_SESSION['registration_error'] = 'Student email must be a valid address ending with @student.tarc.edu.my.';
+                header('Location: /participants/create');
+                exit;
+            }
+        }
+
+        $studentEmailForWalkIn = trim((string)($_POST['student_email'] ?? ''));
+        if ($registrationType === 'walk_in' && $studentEmailForWalkIn !== '' && !$this->isValidTarcStudentEmail($studentEmailForWalkIn)) {
+            $_SESSION['registration_error'] = 'Student email must be a valid address ending with @student.tarc.edu.my.';
+            header('Location: /participants/create-walkin');
+            exit;
+        }
+
         // Check for duplicate student ID
         if (!empty($studentId)) {
             $checkStmt = $db->prepare('SELECT id, full_name FROM participants WHERE student_id = ?');
@@ -144,14 +194,6 @@ class ParticipantController
         $contactNo = $this->formatPhoneNumber($_POST['contact_no'] ?? '');
         $emergencyContactNo = $this->formatPhoneNumber($_POST['emergency_contact_no'] ?? '');
         $preferredLanguage = trim((string)($_POST['preferred_language'] ?? ''));
-        $registrationType = strtolower(trim((string)($_POST['registration_type'] ?? 'pre_register')));
-        if (!in_array($registrationType, ['pre_register', 'walk_in'], true)) {
-            $registrationType = 'pre_register';
-        }
-        $autoAssignedGroupCode = null;
-        if ($registrationType === 'walk_in') {
-            $autoAssignedGroupCode = $this->findAutoAssignGroupCode($db, $preferredLanguage);
-        }
 
         try {
             $stmt = $db->prepare('INSERT INTO participants (
@@ -185,7 +227,7 @@ class ParticipantController
                 $_POST['emergency_contact_relationship'] ?? '',
                 $preferredLanguage,
                 $registrationType,
-                $autoAssignedGroupCode,
+                null,
                 $qrCode,
             ]);
         } catch (\PDOException $e) {
@@ -204,29 +246,6 @@ class ParticipantController
         $stmt = $db->prepare('SELECT * FROM participants WHERE id = ?');
         $stmt->execute([$id]);
         $participant = $stmt->fetch(\PDO::FETCH_ASSOC);
-
-        // Persist auto-assignment in move logs for traceability.
-        if ($registrationType === 'walk_in' && !empty($autoAssignedGroupCode) && !empty($participant)) {
-            try {
-                $logStmt = $db->prepare("
-                    INSERT INTO group_move_logs (
-                        participant_id,
-                        participant_name,
-                        from_group_code,
-                        to_group_code,
-                        moved_by,
-                        action_type
-                    ) VALUES (?, ?, NULL, ?, 'System Auto-Assign', 'move')
-                ");
-                $logStmt->execute([
-                    (int)($participant['id'] ?? 0),
-                    (string)($participant['full_name'] ?? 'Participant'),
-                    (string)$autoAssignedGroupCode,
-                ]);
-            } catch (\Exception $e) {
-                // Keep registration successful even if logging is unavailable.
-            }
-        }
 
         // Generate QR image as base64 PNG data URI (in-memory, no file saved)
         $options = new QROptions([
@@ -265,9 +284,42 @@ class ParticipantController
         $stmt->execute([$code]);
         $participant = $stmt->fetch(\PDO::FETCH_ASSOC);
 
+        $checkinAssignmentNotice = null;
+        $checkinCriticalError = null;
+
         if ($participant) {
-            $update = $db->prepare('UPDATE participants SET checked_in_at = NOW() WHERE id = ?');
-            $update->execute([$participant['id']]);
+            $participantId = (int)$participant['id'];
+            $hadGroup = trim((string)($participant['group_code'] ?? '')) !== '';
+
+            $checkinSaved = false;
+            try {
+                $update = $db->prepare('UPDATE participants SET checked_in_at = NOW() WHERE id = ?');
+                $update->execute([$participantId]);
+                $checkinSaved = true;
+            } catch (\Exception $e) {
+                $checkinCriticalError = 'Could not save check-in: ' . $e->getMessage();
+            }
+
+            if ($checkinSaved && !$hadGroup) {
+                try {
+                    $notice = $this->assignGroupAtCheckIn(
+                        $db,
+                        $participantId,
+                        (string)($participant['preferred_language'] ?? ''),
+                        (string)($participant['full_name'] ?? 'Participant')
+                    );
+                    if ($notice !== null) {
+                        $checkinAssignmentNotice = $notice;
+                    }
+                } catch (\Exception $e) {
+                    $checkinAssignmentNotice = 'Checked in, but group assignment failed: ' . $e->getMessage();
+                }
+            }
+
+            if ($checkinSaved) {
+                $stmt->execute([$code]);
+                $participant = $stmt->fetch(\PDO::FETCH_ASSOC);
+            }
         }
 
         $title = 'QR Check-In Result';
@@ -283,50 +335,86 @@ class ParticipantController
         $title = 'Grouping Overview';
         $db = Container::get('db');
 
-        // Get group summary
-        $stmt = $db->query("SELECT group_code, COUNT(*) AS count FROM participants WHERE group_code IS NOT NULL AND group_code != '' GROUP BY group_code ORDER BY CAST(group_code AS UNSIGNED), group_code");
-        $groups = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        // Groups dashboard: prefer configured empty shells (event_groups)
+        $layoutRows = [];
+        try {
+            $layoutRows = $db->query('
+                SELECT group_code, language_pool
+                FROM event_groups
+                ORDER BY sort_order ASC, CAST(group_code AS UNSIGNED), group_code
+            ')->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\Exception $e) {
+            $layoutRows = [];
+        }
+
+        if ($layoutRows !== []) {
+            $countMap = [];
+            $stmt = $db->query("SELECT group_code, COUNT(*) AS count FROM participants WHERE group_code IS NOT NULL AND group_code != '' GROUP BY group_code");
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+                $countMap[(string)$row['group_code']] = (int)$row['count'];
+            }
+
+            $groups = [];
+            $groupTypes = [];
+            $participantsByGroup = [];
+            foreach ($layoutRows as $row) {
+                $gc = (string)$row['group_code'];
+                $groups[] = ['group_code' => $gc, 'count' => $countMap[$gc] ?? 0];
+                $groupTypes[$gc] = (($row['language_pool'] ?? '') === 'english') ? 'English' : 'Mandarin';
+                $participantsByGroup[$gc] = [];
+            }
+
+            $stmt = $db->query("SELECT id, full_name, student_id, preferred_language, registration_type, checked_in_at, group_code FROM participants WHERE group_code IS NOT NULL AND group_code != '' ORDER BY CAST(group_code AS UNSIGNED), group_code, full_name");
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $p) {
+                $group = (string)$p['group_code'];
+                if (isset($participantsByGroup[$group])) {
+                    $participantsByGroup[$group][] = $p;
+                }
+            }
+        } else {
+            // Legacy: infer groups from participant assignments only
+            $stmt = $db->query("SELECT group_code, COUNT(*) AS count FROM participants WHERE group_code IS NOT NULL AND group_code != '' GROUP BY group_code ORDER BY CAST(group_code AS UNSIGNED), group_code");
+            $groups = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+            $stmt = $db->query("SELECT id, full_name, student_id, preferred_language, registration_type, checked_in_at, group_code FROM participants WHERE group_code IS NOT NULL AND group_code != '' ORDER BY CAST(group_code AS UNSIGNED), group_code, full_name");
+            $participantsByGroup = [];
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $p) {
+                $group = $p['group_code'];
+                if (!isset($participantsByGroup[$group])) {
+                    $participantsByGroup[$group] = [];
+                }
+                $participantsByGroup[$group][] = $p;
+            }
+
+            $groupTypes = [];
+            foreach ($participantsByGroup as $groupCode => $participants) {
+                $englishCount = 0;
+                $mandarinCount = 0;
+                $otherCount = 0;
+                foreach ($participants as $participant) {
+                    $language = strtolower(trim((string)($participant['preferred_language'] ?? '')));
+                    if ($language === 'english') {
+                        $englishCount++;
+                    } elseif ($language === 'mandarin' || $language === 'chinese') {
+                        $mandarinCount++;
+                    } else {
+                        $otherCount++;
+                    }
+                }
+
+                if ($englishCount > 0 && $mandarinCount === 0 && $otherCount === 0) {
+                    $groupTypes[$groupCode] = 'English';
+                } elseif ($mandarinCount > 0 && $englishCount === 0 && $otherCount === 0) {
+                    $groupTypes[$groupCode] = 'Mandarin';
+                } else {
+                    $groupTypes[$groupCode] = 'Mixed';
+                }
+            }
+        }
 
         // Get ungrouped count
         $stmt = $db->query("SELECT COUNT(*) AS count FROM participants WHERE group_code IS NULL OR group_code = ''");
         $ungrouped = $stmt->fetch(\PDO::FETCH_ASSOC)['count'];
-
-        // Get participants by group for detailed view
-        $stmt = $db->query("SELECT id, full_name, student_id, preferred_language, registration_type, checked_in_at, group_code FROM participants WHERE group_code IS NOT NULL AND group_code != '' ORDER BY CAST(group_code AS UNSIGNED), group_code, full_name");
-        $participantsByGroup = [];
-        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $p) {
-            $group = $p['group_code'];
-            if (!isset($participantsByGroup[$group])) {
-                $participantsByGroup[$group] = [];
-            }
-            $participantsByGroup[$group][] = $p;
-        }
-
-        // Build group type labels using only: English, Mandarin, Mixed
-        $groupTypes = [];
-        foreach ($participantsByGroup as $groupCode => $participants) {
-            $englishCount = 0;
-            $mandarinCount = 0;
-            $otherCount = 0;
-            foreach ($participants as $participant) {
-                $language = strtolower(trim((string)($participant['preferred_language'] ?? '')));
-                if ($language === 'english') {
-                    $englishCount++;
-                } elseif ($language === 'mandarin' || $language === 'chinese') {
-                    $mandarinCount++;
-                } else {
-                    $otherCount++;
-                }
-            }
-
-            if ($englishCount > 0 && $mandarinCount === 0 && $otherCount === 0) {
-                $groupTypes[$groupCode] = 'English';
-            } elseif ($mandarinCount > 0 && $englishCount === 0 && $otherCount === 0) {
-                $groupTypes[$groupCode] = 'Mandarin';
-            } else {
-                $groupTypes[$groupCode] = 'Mixed';
-            }
-        }
 
         // Get ungrouped participants for drag and drop editor
         $stmt = $db->query("SELECT id, full_name, student_id, preferred_language, registration_type, checked_in_at FROM participants WHERE group_code IS NULL OR group_code = '' ORDER BY full_name");
@@ -411,6 +499,17 @@ class ParticipantController
             exit;
         }
 
+        if ($this->eventGroupLayoutExists($db)) {
+            $v = $db->prepare('SELECT 1 FROM event_groups WHERE group_code = ? LIMIT 1');
+            $v->execute([$groupCode]);
+            if (!$v->fetchColumn()) {
+                $_SESSION['grouping_message'] = 'That group is not part of the saved layout.';
+                $_SESSION['grouping_message_type'] = 'danger';
+                header('Location: /participants/groups');
+                exit;
+            }
+        }
+
         try {
             $db->beginTransaction();
 
@@ -445,50 +544,8 @@ class ParticipantController
     public function autoGroup(): void
     {
         Auth::requireRole(['advisor', 'committee']);
-
-        $db = Container::get('db');
-
-        // Get number of groups from POST (default to 8 if not provided)
-        $numGroups = (int)($_POST['num_groups'] ?? 8);
-        if ($numGroups < 1 || $numGroups > 99) {
-            $numGroups = 8; // Safety limit
-        }
-
-        // Generate numeric group codes (1, 2, 3, ...)
-        $groupCodes = $this->buildNumericGroupCodes($numGroups);
-
-        // Get all participants without groups, ordered by ID for consistent round-robin
-        $stmt = $db->query('SELECT id FROM participants WHERE group_code IS NULL ORDER BY id');
-        $participants = $stmt->fetchAll(\PDO::FETCH_COLUMN);
-
-        if (empty($participants)) {
-            $_SESSION['grouping_message'] = 'No ungrouped participants found.';
-            $_SESSION['grouping_message_type'] = 'warning';
-            header('Location: /participants/groups');
-            exit;
-        }
-
-        // Round-robin assignment
-        $db->beginTransaction();
-        try {
-            $updateStmt = $db->prepare('UPDATE participants SET group_code = ? WHERE id = ?');
-            
-            $groupIndex = 0;
-            foreach ($participants as $participantId) {
-                $groupCode = $groupCodes[$groupIndex % count($groupCodes)];
-                $updateStmt->execute([$groupCode, $participantId]);
-                $groupIndex++;
-            }
-
-            $db->commit();
-            $_SESSION['grouping_message'] = "Successfully assigned " . count($participants) . " participants to " . $numGroups . " groups using round-robin algorithm.";
-            $_SESSION['grouping_message_type'] = 'success';
-        } catch (\Exception $e) {
-            $db->rollBack();
-            $_SESSION['grouping_message'] = 'Error assigning groups: ' . $e->getMessage();
-            $_SESSION['grouping_message_type'] = 'danger';
-        }
-
+        $_SESSION['grouping_message'] = 'Bulk auto-grouping is disabled. Configure group shells on this page; participants are placed into groups when they check in.';
+        $_SESSION['grouping_message_type'] = 'info';
         header('Location: /participants/groups');
         exit;
     }
@@ -499,63 +556,8 @@ class ParticipantController
     public function groupByFaculty(): void
     {
         Auth::requireRole(['advisor', 'committee']);
-
-        $db = Container::get('db');
-
-        $numGroups = (int)($_POST['num_groups'] ?? 8);
-        if ($numGroups < 1 || $numGroups > 99) {
-            $numGroups = 8;
-        }
-
-        // Generate numeric group codes
-        $groupCodes = $this->buildNumericGroupCodes($numGroups);
-
-        // Get all ungrouped participants grouped by faculty
-        $stmt = $db->query('SELECT id, faculty FROM participants WHERE group_code IS NULL AND faculty IS NOT NULL AND faculty != "" ORDER BY faculty, id');
-        $participants = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        if (empty($participants)) {
-            $_SESSION['grouping_message'] = 'No ungrouped participants with faculty information found.';
-            $_SESSION['grouping_message_type'] = 'warning';
-            header('Location: /participants/groups');
-            exit;
-        }
-
-        // Group by faculty
-        $byFaculty = [];
-        foreach ($participants as $p) {
-            $faculty = $p['faculty'];
-            if (!isset($byFaculty[$faculty])) {
-                $byFaculty[$faculty] = [];
-            }
-            $byFaculty[$faculty][] = $p['id'];
-        }
-
-        $db->beginTransaction();
-        try {
-            $updateStmt = $db->prepare('UPDATE participants SET group_code = ? WHERE id = ?');
-            
-            $totalAssigned = 0;
-            foreach ($byFaculty as $faculty => $participantIds) {
-                // Round-robin within each faculty
-                $groupIndex = 0;
-                foreach ($participantIds as $participantId) {
-                    $groupCode = $groupCodes[$groupIndex % count($groupCodes)];
-                    $updateStmt->execute([$groupCode, $participantId]);
-                    $groupIndex++;
-                    $totalAssigned++;
-                }
-            }
-
-            $db->commit();
-            $_SESSION['grouping_message'] = "Successfully assigned $totalAssigned participants to $numGroups groups by Faculty (round-robin within each faculty).";
-            $_SESSION['grouping_message_type'] = 'success';
-        } catch (\Exception $e) {
-            $db->rollBack();
-            $_SESSION['grouping_message'] = 'Error grouping by faculty: ' . $e->getMessage();
-            $_SESSION['grouping_message_type'] = 'danger';
-        }
-
+        $_SESSION['grouping_message'] = 'Bulk grouping by faculty is disabled. Participants are assigned to groups at check-in based on the saved group layout and preferred language.';
+        $_SESSION['grouping_message_type'] = 'info';
         header('Location: /participants/groups');
         exit;
     }
@@ -566,71 +568,16 @@ class ParticipantController
     public function groupByLanguage(): void
     {
         Auth::requireRole(['advisor', 'committee']);
-
-        $db = Container::get('db');
-
-        $numGroups = (int)($_POST['num_groups'] ?? 8);
-        if ($numGroups < 1 || $numGroups > 99) {
-            $numGroups = 8;
-        }
-
-        // Generate numeric group codes
-        $groupCodes = $this->buildNumericGroupCodes($numGroups);
-
-        // Get all ungrouped participants grouped by language
-        $stmt = $db->query('SELECT id, preferred_language FROM participants WHERE group_code IS NULL AND preferred_language IS NOT NULL AND preferred_language != "" ORDER BY preferred_language, id');
-        $participants = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        if (empty($participants)) {
-            $_SESSION['grouping_message'] = 'No ungrouped participants with language information found.';
-            $_SESSION['grouping_message_type'] = 'warning';
-            header('Location: /participants/groups');
-            exit;
-        }
-
-        // Group by language
-        $byLanguage = [];
-        foreach ($participants as $p) {
-            $language = $p['preferred_language'];
-            if (!isset($byLanguage[$language])) {
-                $byLanguage[$language] = [];
-            }
-            $byLanguage[$language][] = $p['id'];
-        }
-
-        $db->beginTransaction();
-        try {
-            $updateStmt = $db->prepare('UPDATE participants SET group_code = ? WHERE id = ?');
-            
-            $totalAssigned = 0;
-            foreach ($byLanguage as $language => $participantIds) {
-                // Round-robin within each language
-                $groupIndex = 0;
-                foreach ($participantIds as $participantId) {
-                    $groupCode = $groupCodes[$groupIndex % count($groupCodes)];
-                    $updateStmt->execute([$groupCode, $participantId]);
-                    $groupIndex++;
-                    $totalAssigned++;
-                }
-            }
-
-            $db->commit();
-            $_SESSION['grouping_message'] = "Successfully assigned $totalAssigned participants to $numGroups groups by Language (round-robin within each language).";
-            $_SESSION['grouping_message_type'] = 'success';
-        } catch (\Exception $e) {
-            $db->rollBack();
-            $_SESSION['grouping_message'] = 'Error grouping by language: ' . $e->getMessage();
-            $_SESSION['grouping_message_type'] = 'danger';
-        }
-
+        $_SESSION['grouping_message'] = 'Bulk grouping by language is disabled. Participants are assigned to groups at check-in based on the saved group layout and preferred language.';
+        $_SESSION['grouping_message_type'] = 'info';
         header('Location: /participants/groups');
         exit;
     }
 
     /**
-     * Group ungrouped participants by language with dedicated English groups.
+     * Save empty group shells (codes + English vs Mandarin pools). Assignment happens at check-in only.
      */
-    public function groupByLanguageCustom(): void
+    public function saveGroupLayout(): void
     {
         Auth::requireRole(['advisor', 'committee']);
 
@@ -655,77 +602,34 @@ class ParticipantController
 
         $groupCodes = $this->buildNumericGroupCodes($numGroups);
 
-        $englishGroupCodes = array_slice($groupCodes, 0, $englishGroups);
-        $nonEnglishGroupCodes = array_slice($groupCodes, $englishGroups);
-        if (empty($nonEnglishGroupCodes)) {
-            $nonEnglishGroupCodes = $groupCodes;
-        }
-
-        $stmt = $db->query("SELECT id, preferred_language FROM participants WHERE group_code IS NULL OR group_code = '' ORDER BY id");
-        $participants = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-
-        if (empty($participants)) {
-            $_SESSION['grouping_message'] = 'No ungrouped participants found.';
-            $_SESSION['grouping_message_type'] = 'warning';
-            header('Location: /participants/groups');
-            exit;
-        }
-
-        $groupCounts = [];
-        foreach ($groupCodes as $code) {
-            $groupCounts[$code] = 0;
-        }
-        $countStmt = $db->query("SELECT group_code, COUNT(*) AS count FROM participants WHERE group_code IS NOT NULL AND group_code != '' GROUP BY group_code");
-        foreach ($countStmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
-            $code = (string)($row['group_code'] ?? '');
-            if (isset($groupCounts[$code])) {
-                $groupCounts[$code] = (int)($row['count'] ?? 0);
-            }
-        }
-
-        $englishParticipants = [];
-        $nonEnglishParticipants = [];
-        foreach ($participants as $participant) {
-            $language = strtolower(trim((string)($participant['preferred_language'] ?? '')));
-            if ($language === 'english') {
-                $englishParticipants[] = (int)$participant['id'];
-            } else {
-                $nonEnglishParticipants[] = (int)$participant['id'];
-            }
-        }
-
-        $db->beginTransaction();
         try {
-            $updateStmt = $db->prepare('UPDATE participants SET group_code = ? WHERE id = ?');
+            $db->beginTransaction();
 
-            $assigned = 0;
-            foreach ($englishParticipants as $participantId) {
-                $groupCode = $this->findAvailableGroupCode($englishGroupCodes, $groupCounts, $maxPerGroup);
-                if ($groupCode === null) {
-                    throw new \RuntimeException('Not enough capacity for English participants. Increase max per group or number of groups.');
-                }
-                $updateStmt->execute([$groupCode, $participantId]);
-                $groupCounts[$groupCode]++;
-                $assigned++;
+            $db->exec('DELETE FROM event_groups');
+
+            $insert = $db->prepare('INSERT INTO event_groups (group_code, language_pool, sort_order) VALUES (?, ?, ?)');
+            $sort = 0;
+            foreach ($groupCodes as $code) {
+                $sort++;
+                $pool = $sort <= $englishGroups ? 'english' : 'mandarin';
+                $insert->execute([(string)$code, $pool, $sort]);
             }
 
-            foreach ($nonEnglishParticipants as $participantId) {
-                $groupCode = $this->findAvailableGroupCode($nonEnglishGroupCodes, $groupCounts, $maxPerGroup);
-                if ($groupCode === null) {
-                    throw new \RuntimeException('Not enough capacity for non-English participants. Increase max per group or number of groups.');
-                }
-                $updateStmt->execute([$groupCode, $participantId]);
-                $groupCounts[$groupCode]++;
-                $assigned++;
-            }
+            $settingsStmt = $db->prepare('
+                INSERT INTO event_group_settings (id, max_per_group) VALUES (1, ?)
+                ON DUPLICATE KEY UPDATE max_per_group = VALUES(max_per_group)
+            ');
+            $settingsStmt->execute([$maxPerGroup]);
 
             $db->commit();
-            $limitText = $maxPerGroup > 0 ? " (max {$maxPerGroup} per group)." : '.';
-            $_SESSION['grouping_message'] = "Assigned {$assigned} participants into {$numGroups} groups with {$englishGroups} dedicated English group(s){$limitText}";
+            $capText = $maxPerGroup > 0 ? " Max {$maxPerGroup} participants per group when assigning at check-in." : '';
+            $_SESSION['grouping_message'] = "Saved {$numGroups} empty group shells ({$englishGroups} English pool, " . ($numGroups - $englishGroups) . " Mandarin pool). Participants are assigned round-robin when they check in.{$capText}";
             $_SESSION['grouping_message_type'] = 'success';
         } catch (\Exception $e) {
-            $db->rollBack();
-            $_SESSION['grouping_message'] = 'Error in custom language grouping: ' . $e->getMessage();
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $_SESSION['grouping_message'] = 'Could not save group layout. Run database migrations if this is a new install: ' . $e->getMessage();
             $_SESSION['grouping_message_type'] = 'danger';
         }
 
@@ -763,6 +667,15 @@ class ParticipantController
             $targetGroup = (string)((int)$targetGroup);
         } else {
             $targetGroup = null;
+        }
+
+        if ($targetGroup !== null && $this->eventGroupLayoutExists($db)) {
+            $v = $db->prepare('SELECT 1 FROM event_groups WHERE group_code = ? LIMIT 1');
+            $v->execute([$targetGroup]);
+            if (!$v->fetchColumn()) {
+                $this->respondGroupMove(false, 'Target group is not in the saved layout. Refresh the page after updating the layout.');
+                return;
+            }
         }
 
         try {
@@ -857,6 +770,36 @@ class ParticipantController
             $_SESSION['grouping_message_type'] = 'success';
         } catch (\Exception $e) {
             $_SESSION['grouping_message'] = 'Error clearing groups: ' . $e->getMessage();
+            $_SESSION['grouping_message_type'] = 'danger';
+        }
+
+        header('Location: /participants/groups');
+        exit;
+    }
+
+    /**
+     * Remove saved group layout (event_groups), reset per-group cap, and clear senior buddy → group links.
+     * Does not change participant group_code; use clearGroups for that.
+     */
+    public function clearGroupShells(): void
+    {
+        Auth::requireRole(['advisor', 'committee']);
+
+        $db = Container::get('db');
+
+        try {
+            $db->beginTransaction();
+            $db->exec('DELETE FROM event_groups');
+            $db->exec('INSERT INTO event_group_settings (id, max_per_group) VALUES (1, 0) ON DUPLICATE KEY UPDATE max_per_group = 0');
+            $db->exec('UPDATE crew SET assigned_group_code = NULL WHERE is_facilitator = 1');
+            $db->commit();
+            $_SESSION['grouping_message'] = 'Group shells and senior buddy group links were removed. Participant group numbers were not changed—use “Clear participant group assignments” if you need those cleared too. Save a new layout before check-in can assign groups again.';
+            $_SESSION['grouping_message_type'] = 'success';
+        } catch (\Exception $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $_SESSION['grouping_message'] = 'Could not clear group shells. If this is a new database, run migrations: ' . $e->getMessage();
             $_SESSION['grouping_message_type'] = 'danger';
         }
 
@@ -1000,6 +943,26 @@ class ParticipantController
     }
 
     /**
+     * Student email must be syntactically valid and use hostname student.tarc.edu.my (case-insensitive domain).
+     */
+    private function isValidTarcStudentEmail(string $email): bool
+    {
+        $email = trim($email);
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return false;
+        }
+
+        $at = strrpos($email, '@');
+        if ($at === false) {
+            return false;
+        }
+
+        $domain = strtolower(substr($email, $at + 1));
+
+        return $domain === 'student.tarc.edu.my';
+    }
+
+    /**
      * Convert phone number from 0XXXXXXXXX to 60XXXXXXXXX format
      */
     private function formatPhoneNumber(string $phone): string
@@ -1038,82 +1001,119 @@ class ParticipantController
         return $codes;
     }
 
-    private function findAutoAssignGroupCode(\PDO $db, string $preferredLanguage = ''): string
+    private function eventGroupLayoutExists(\PDO $db): bool
     {
-        $stmt = $db->query("
-            SELECT
-                group_code,
-                COUNT(*) AS count,
-                SUM(CASE WHEN LOWER(preferred_language) = 'english' THEN 1 ELSE 0 END) AS english_count,
-                SUM(CASE WHEN LOWER(preferred_language) IN ('mandarin', 'chinese') THEN 1 ELSE 0 END) AS mandarin_count
-            FROM participants
-            WHERE group_code IS NOT NULL AND group_code != ''
-            GROUP BY group_code
-            ORDER BY CAST(group_code AS UNSIGNED), group_code
-        ");
-
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-        $normalizedLanguage = strtolower(trim($preferredLanguage));
-        $matchingCodes = [];
-
-        foreach ($rows as $row) {
-            $groupCode = (string)($row['group_code'] ?? '');
-            if ($groupCode === '') {
-                continue;
-            }
-
-            $total = (int)($row['count'] ?? 0);
-            $englishCount = (int)($row['english_count'] ?? 0);
-            $mandarinCount = (int)($row['mandarin_count'] ?? 0);
-
-            if ($normalizedLanguage === 'english' && $total > 0 && $englishCount === $total) {
-                $matchingCodes[] = ['group_code' => $groupCode, 'count' => $total];
-            }
-            if (($normalizedLanguage === 'mandarin' || $normalizedLanguage === 'chinese') && $total > 0 && $mandarinCount === $total) {
-                $matchingCodes[] = ['group_code' => $groupCode, 'count' => $total];
-            }
+        try {
+            return (int)$db->query('SELECT COUNT(*) FROM event_groups')->fetchColumn() > 0;
+        } catch (\Exception $e) {
+            return false;
         }
-
-        if (!empty($matchingCodes)) {
-            usort($matchingCodes, static function (array $a, array $b): int {
-                $countCompare = ((int)$a['count']) <=> ((int)$b['count']);
-                if ($countCompare !== 0) {
-                    return $countCompare;
-                }
-                return ((int)$a['group_code']) <=> ((int)$b['group_code']);
-            });
-            return (string)$matchingCodes[0]['group_code'];
-        }
-
-        if (!empty($rows)) {
-            usort($rows, static function (array $a, array $b): int {
-                $countCompare = ((int)$a['count']) <=> ((int)$b['count']);
-                if ($countCompare !== 0) {
-                    return $countCompare;
-                }
-                return ((int)$a['group_code']) <=> ((int)$b['group_code']);
-            });
-            return (string)$rows[0]['group_code'];
-        }
-
-        // If no groups exist yet, start with Group 1.
-        return '1';
     }
 
-    private function findAvailableGroupCode(array $candidateCodes, array &$groupCounts, int $maxPerGroup): ?string
+    private function getEventGroupMaxPerGroup(\PDO $db): int
     {
-        if (empty($candidateCodes)) {
+        try {
+            $v = $db->query('SELECT max_per_group FROM event_group_settings WHERE id = 1')->fetchColumn();
+
+            return max(0, (int)$v);
+        } catch (\Exception $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Assign group at check-in (round-robin = lightest load within language pool). Returns a notice if not assigned.
+     */
+    private function assignGroupAtCheckIn(\PDO $db, int $participantId, string $preferredLanguage, string $participantName): ?string
+    {
+        if (!$this->eventGroupLayoutExists($db)) {
+            return 'Group shells are not set up yet. On Grouping Overview, save a group layout; then check in again to assign a group.';
+        }
+
+        $lang = strtolower(trim($preferredLanguage));
+        $pool = ($lang === 'english') ? 'english' : 'mandarin';
+
+        $stmt = $db->prepare('
+            SELECT group_code
+            FROM event_groups
+            WHERE language_pool = ?
+            ORDER BY sort_order ASC, CAST(group_code AS UNSIGNED), group_code
+        ');
+        $stmt->execute([$pool]);
+        $poolCodes = array_map('strval', $stmt->fetchAll(\PDO::FETCH_COLUMN));
+        if ($poolCodes === []) {
+            return 'The saved layout has no groups in this participant\'s language pool. Adjust total vs English group counts.';
+        }
+
+        $max = $this->getEventGroupMaxPerGroup($db);
+        $chosen = $this->pickGroupWithLightestLoad($db, $poolCodes, $max);
+        if ($chosen === null) {
+            return 'All groups in this language pool are at capacity. Raise max per group or add groups, then check in again.';
+        }
+
+        $upd = $db->prepare('UPDATE participants SET group_code = ? WHERE id = ? AND IFNULL(group_code, \'\') = \'\'');
+        $upd->execute([$chosen, $participantId]);
+        if ($upd->rowCount() === 0) {
             return null;
         }
 
-        foreach ($candidateCodes as $code) {
-            $count = (int)($groupCounts[$code] ?? 0);
-            if ($maxPerGroup <= 0 || $count < $maxPerGroup) {
-                return $code;
-            }
+        try {
+            $log = $db->prepare('
+                INSERT INTO group_move_logs (
+                    participant_id,
+                    participant_name,
+                    from_group_code,
+                    to_group_code,
+                    moved_by,
+                    action_type
+                ) VALUES (?, ?, NULL, ?, ?, ?)
+            ');
+            $log->execute([$participantId, $participantName, $chosen, 'System Check-in', 'move']);
+        } catch (\Exception $e) {
+            // Check-in assignment should still succeed if logging fails.
         }
 
         return null;
+    }
+
+    /**
+     * @param list<string> $poolCodes
+     */
+    private function pickGroupWithLightestLoad(\PDO $db, array $poolCodes, int $maxPerGroup): ?string
+    {
+        if ($poolCodes === []) {
+            return null;
+        }
+
+        $counts = [];
+        foreach ($poolCodes as $c) {
+            $counts[$c] = 0;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($poolCodes), '?'));
+        $cstmt = $db->prepare("SELECT group_code, COUNT(*) AS c FROM participants WHERE group_code IN ($placeholders) GROUP BY group_code");
+        $cstmt->execute($poolCodes);
+        foreach ($cstmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            $gc = (string)$row['group_code'];
+            if (array_key_exists($gc, $counts)) {
+                $counts[$gc] = (int)$row['c'];
+            }
+        }
+
+        $best = null;
+        $bestCount = PHP_INT_MAX;
+        foreach ($poolCodes as $code) {
+            $n = $counts[$code] ?? 0;
+            if ($maxPerGroup > 0 && $n >= $maxPerGroup) {
+                continue;
+            }
+            if ($n < $bestCount) {
+                $bestCount = $n;
+                $best = $code;
+            }
+        }
+
+        return $best;
     }
 
     private function respondGroupMove(bool $success, string $message, array $extra = []): void

@@ -11,19 +11,24 @@ use App\Core\Auth;
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 </head>
 <body>
+<?php if (\App\Core\Auth::check()): ?>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
     <div class="container-fluid">
-        <a class="navbar-brand" href="/">ATCL MS</a>
+        <a class="navbar-brand" href="<?= \App\Core\Auth::check() ? '/dashboard' : '/' ?>">ATCL MS</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
             <span class="navbar-toggler-icon"></span>
         </button>
         <div class="collapse navbar-collapse" id="mainNav">
             <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                 <?php if (\App\Core\Auth::check()): ?>
+                    <li class="nav-item"><a class="nav-link" href="/dashboard">Home</a></li>
                     <li class="nav-item"><a class="nav-link" href="/participants">Participants</a></li>
                     <li class="nav-item"><a class="nav-link" href="/finance">Finance</a></li>
                     <li class="nav-item"><a class="nav-link" href="/forms">Forms</a></li>
                     <li class="nav-item"><a class="nav-link" href="/operations">Operations</a></li>
+                    <?php if (in_array(\App\Core\Auth::role(), ['advisor', 'committee'], true)): ?>
+                        <li class="nav-item"><a class="nav-link" href="/settings/landing">Landing Settings</a></li>
+                    <?php endif; ?>
                 <?php else: ?>
                     <li class="nav-item"><a class="nav-link" href="/participants/create">Participant Registration</a></li>
                 <?php endif; ?>
@@ -44,4 +49,5 @@ use App\Core\Auth;
         </div>
     </div>
 </nav>
+<?php endif; ?>
 <div class="container mb-4">

@@ -4,6 +4,12 @@
 <h2>Check-In Result</h2>
 
 <?php if (!empty($participant)): ?>
+    <?php if (!empty($checkinCriticalError)): ?>
+        <div class="alert alert-danger">
+            <h5 class="mb-2">Check-in could not be completed</h5>
+            <p class="mb-0"><?= htmlspecialchars($checkinCriticalError) ?></p>
+        </div>
+    <?php else: ?>
     <div class="alert alert-success">
         <h5 class="mb-2">Check-in Successful</h5>
         <p class="mb-1"><strong>Name:</strong> <?= htmlspecialchars($participant['full_name']) ?></p>
@@ -14,8 +20,13 @@
             <p class="mb-0"><strong>Group:</strong> <span class="text-muted">Not assigned</span></p>
         <?php endif; ?>
     </div>
+    <?php if (!empty($checkinAssignmentNotice)): ?>
+        <div class="alert alert-warning mt-2 mb-0">
+            <?= htmlspecialchars($checkinAssignmentNotice) ?>
+        </div>
+    <?php endif; ?>
     <?php if (!empty($participant['medical_notes']) || !empty($participant['dietary_notes'])): ?>
-        <div class="alert alert-warning">
+        <div class="alert alert-warning mt-3">
             <strong>Safety / Medical info:</strong><br>
             <?php if (!empty($participant['medical_notes'])): ?>
                 <div><strong>Medical:</strong> <?= nl2br(htmlspecialchars($participant['medical_notes'])) ?></div>
@@ -25,6 +36,7 @@
             <?php endif; ?>
         </div>
     <?php endif; ?>
+    <?php endif; ?>
 <?php else: ?>
     <div class="alert alert-danger">
         <h5 class="mb-2">✗ Check-in Failed</h5>
@@ -33,4 +45,3 @@
 <?php endif; ?>
 
 <a href="/participants/checkin" class="btn btn-secondary mt-3">Back to check-in</a>
-

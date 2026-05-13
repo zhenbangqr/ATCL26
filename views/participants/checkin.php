@@ -2,6 +2,7 @@
 // QR code / code input for check-in, with camera scanner
 ?>
 <h2>QR Check-In</h2>
+<p class="text-muted small">Participants receive their camp group here (round-robin by preferred language) if group shells are saved on the Grouping Overview page.</p>
 
 <div class="row mt-3">
     <div class="col-md-6 mb-4">

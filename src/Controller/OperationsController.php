@@ -114,6 +114,50 @@ class OperationsController
         exit;
     }
 
+    public function deleteCrew(): void
+    {
+        Auth::requireRole(['advisor', 'committee']);
+
+        $db = Container::get('db');
+        $crewId = (int)($_POST['crew_id'] ?? 0);
+
+        if ($crewId <= 0) {
+            $_SESSION['crew_message'] = 'Invalid crew selected.';
+            $_SESSION['crew_message_type'] = 'danger';
+            header('Location: /operations/crew');
+            exit;
+        }
+
+        try {
+            $db->beginTransaction();
+
+            $delAttendance = $db->prepare('DELETE FROM crew_attendance WHERE crew_id = ?');
+            $delAttendance->execute([$crewId]);
+
+            $delCrew = $db->prepare('DELETE FROM crew WHERE id = ?');
+            $delCrew->execute([$crewId]);
+
+            if ($delCrew->rowCount() === 0) {
+                $db->rollBack();
+                $_SESSION['crew_message'] = 'Crew member not found.';
+                $_SESSION['crew_message_type'] = 'danger';
+            } else {
+                $db->commit();
+                $_SESSION['crew_message'] = 'Crew member removed.';
+                $_SESSION['crew_message_type'] = 'success';
+            }
+        } catch (\Exception $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $_SESSION['crew_message'] = 'Failed to delete crew: ' . $e->getMessage();
+            $_SESSION['crew_message_type'] = 'danger';
+        }
+
+        header('Location: /operations/crew');
+        exit;
+    }
+
     public function games(): void
     {
         Auth::requireRole(['advisor', 'committee']);

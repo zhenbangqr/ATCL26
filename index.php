@@ -13,6 +13,12 @@ $router = new Router();
 
 // Home / dashboard
 $router->get('/', 'HomeController@index');
+$router->get('/dashboard', 'HomeController@dashboard');
+$router->get('/public', 'HomeController@public');
+
+// Site settings (advisor / committee)
+$router->get('/settings/landing', 'SettingsController@landingPage');
+$router->post('/settings/landing/save', 'SettingsController@landingPageSave');
 
 // Auth
 $router->get('/login', 'AuthController@showLogin');
@@ -33,11 +39,12 @@ $router->get('/participants/groups', 'ParticipantController@groups');
 $router->post('/participants/auto-group', 'ParticipantController@autoGroup');
 $router->post('/participants/group-by-faculty', 'ParticipantController@groupByFaculty');
 $router->post('/participants/group-by-language', 'ParticipantController@groupByLanguage');
-$router->post('/participants/group-by-language-custom', 'ParticipantController@groupByLanguageCustom');
+$router->post('/participants/groups/save-layout', 'ParticipantController@saveGroupLayout');
 $router->post('/participants/groups/move', 'ParticipantController@moveParticipantGroup');
 $router->post('/participants/groups/assign-facilitator', 'ParticipantController@assignFacilitatorToGroup');
 $router->get('/participants/groups/state', 'ParticipantController@groupsState');
 $router->post('/participants/clear-groups', 'ParticipantController@clearGroups');
+$router->post('/participants/clear-group-shells', 'ParticipantController@clearGroupShells');
 $router->get('/participants/export', 'ParticipantController@export');
 
 // 2. Financial Control & Procurement
@@ -75,7 +82,16 @@ $router->get('/operations/crew', 'OperationsController@crew');
 $router->get('/operations/crew/create', 'OperationsController@createCrew');
 $router->post('/operations/crew/store', 'OperationsController@storeCrew');
 $router->post('/operations/crew/update-facilitator', 'OperationsController@updateFacilitator');
+$router->post('/operations/crew/delete', 'OperationsController@deleteCrew');
 $router->get('/operations/games', 'OperationsController@games');
+
+// 4. Logistics & Governance
+$router->get('/logistics', 'LogisticsController@index');
+$router->get('/logistics/venues', 'LogisticsController@venues');
+$router->get('/logistics/inventory', 'LogisticsController@inventory');
+$router->get('/governance', 'GovernanceController@index');
+$router->get('/governance/tasks', 'GovernanceController@tasks');
+$router->get('/governance/proposals', 'GovernanceController@proposals');
 
 // Dispatch
 $router->dispatch($_SERVER['REQUEST_METHOD'], $_SERVER['REQUEST_URI']);

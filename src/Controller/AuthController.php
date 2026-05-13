@@ -23,7 +23,7 @@ class AuthController
         $password = trim($_POST['password'] ?? '');
 
         if (Auth::attempt($username, $password)) {
-            header('Location: /');
+            header('Location: /dashboard');
             exit;
         }
 
@@ -38,4 +38,3 @@ class AuthController
         exit;
     }
 }
-

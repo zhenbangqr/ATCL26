@@ -37,20 +37,31 @@ if ($message !== null) {
             <td><?= ((int)($c['is_facilitator'] ?? 0) === 1) ? 'Yes' : 'No' ?></td>
             <td><?= htmlspecialchars($c['assigned_group_code'] ?? '-') ?></td>
             <td>
-                <form method="post" action="/operations/crew/update-facilitator" class="d-flex align-items-center gap-2">
-                    <input type="hidden" name="crew_id" value="<?= (int)$c['id'] ?>">
-                    <div class="form-check m-0">
-                        <input
-                            class="form-check-input"
-                            type="checkbox"
-                            name="is_facilitator"
-                            value="1"
-                            id="facilitator_<?= (int)$c['id'] ?>"
-                            <?= ((int)($c['is_facilitator'] ?? 0) === 1) ? 'checked' : '' ?>
-                        >
-                    </div>
-                    <button type="submit" class="btn btn-outline-primary btn-sm">Save</button>
-                </form>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <form method="post" action="/operations/crew/update-facilitator" class="d-flex align-items-center gap-2">
+                        <input type="hidden" name="crew_id" value="<?= (int)$c['id'] ?>">
+                        <div class="form-check m-0">
+                            <input
+                                class="form-check-input"
+                                type="checkbox"
+                                name="is_facilitator"
+                                value="1"
+                                id="facilitator_<?= (int)$c['id'] ?>"
+                                <?= ((int)($c['is_facilitator'] ?? 0) === 1) ? 'checked' : '' ?>
+                            >
+                        </div>
+                        <button type="submit" class="btn btn-outline-primary btn-sm">Save</button>
+                    </form>
+                    <form
+                        method="post"
+                        action="/operations/crew/delete"
+                        class="m-0"
+                        onsubmit="return confirm('Remove this crew member from the roster? This cannot be undone.');"
+                    >
+                        <input type="hidden" name="crew_id" value="<?= (int)$c['id'] ?>">
+                        <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
+                    </form>
+                </div>
             </td>
         </tr>
     <?php endforeach; ?>

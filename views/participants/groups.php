@@ -31,24 +31,29 @@ if (isset($_SESSION['grouping_message'])) {
             <div class="card-body">
                 <h5 class="card-title">Grouping Options</h5>
                 <div class="card card-body bg-light border mb-2">
-                    <form method="post" action="/participants/group-by-language-custom" class="d-flex flex-wrap align-items-end gap-2 mb-0">
+                    <h6 class="mb-2">1. Save empty group shells</h6>
+                    <form method="post" action="/participants/groups/save-layout" class="d-flex flex-wrap align-items-end gap-2 mb-0">
                         <div>
                             <label for="num_groups_custom" class="form-label form-label-sm mb-1">Total groups</label>
                             <input type="number" name="num_groups" id="num_groups_custom" class="form-control form-control-sm" value="8" min="1" max="99" required style="width: 120px;">
                         </div>
                         <div>
-                            <label for="english_groups" class="form-label form-label-sm mb-1">English groups</label>
+                            <label for="english_groups" class="form-label form-label-sm mb-1">English pool (first N group numbers)</label>
                             <input type="number" name="english_groups" id="english_groups" class="form-control form-control-sm" value="2" min="1" max="99" required style="width: 120px;">
                         </div>
                         <div>
-                            <label for="max_per_group" class="form-label form-label-sm mb-1">Max per group</label>
+                            <label for="max_per_group" class="form-label form-label-sm mb-1">Max per group at check-in (0 = no limit)</label>
                             <input type="number" name="max_per_group" id="max_per_group" class="form-control form-control-sm" value="0" min="0" max="300" style="width: 120px;">
                         </div>
-                        <button type="submit" class="btn btn-dark btn-sm">Apply Custom</button>
+                        <button type="submit" class="btn btn-dark btn-sm">Save group layout</button>
                     </form>
+                    <p class="small text-muted mb-0 mt-2">
+                        This only creates empty group shells (Group 1, Group 2, …). Participants stay ungrouped until they check in;
+                        then they are placed round-robin into the English or Mandarin pool matching their preferred language.
+                    </p>
                 </div>
                 <div class="card card-body bg-light border mb-2">
-                    <h6 class="mb-2">Crew List by Group</h6>
+                    <h6 class="mb-2">2. Crew list by group (senior buddies)</h6>
                     <div class="row g-2">
                         <?php foreach ($groups as $groupRow): ?>
                             <?php $groupCode = (string)($groupRow['group_code'] ?? ''); ?>
@@ -92,9 +97,14 @@ if (isset($_SESSION['grouping_message'])) {
                     <span><strong>Total Grouped:</strong> <?= array_sum(array_column($groups, 'count')) ?></span>
                 </div>
                 <hr>
-                <form method="post" action="/participants/clear-groups" class="d-inline" onsubmit="return confirm('Are you sure you want to clear all group assignments?');">
-                    <button type="submit" class="btn btn-outline-danger btn-sm">Clear All Groups</button>
-                </form>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <form method="post" action="/participants/clear-groups" class="d-inline m-0" onsubmit="return confirm('Clear every participant\'s group assignment? Group shells stay saved; only roster slots are cleared.');">
+                        <button type="submit" class="btn btn-outline-danger btn-sm">Clear participant group assignments</button>
+                    </form>
+                    <form method="post" action="/participants/clear-group-shells" class="d-inline m-0" onsubmit="return confirm('Remove the saved group layout (empty shells), reset max-per-group at check-in to unlimited, and clear senior buddy → group links? This does not clear participant group numbers—use the other button if you need that too.');">
+                        <button type="submit" class="btn btn-outline-danger btn-sm">Clear group shells</button>
+                    </form>
+                </div>
             </div>
         </div>
     </div>

@@ -8,11 +8,9 @@
         Thank you, <strong><?= htmlspecialchars($participant['full_name']) ?></strong>.
         Please save the QR code below and present it during check-in.
     </p>
-    <?php if (($participant['registration_type'] ?? 'pre_register') === 'walk_in' && !empty($participant['group_code'])): ?>
-        <div class="alert alert-info mt-2">
-            You are automatically assigned to <strong>Group <?= htmlspecialchars((string)$participant['group_code']) ?></strong>.
-        </div>
-    <?php endif; ?>
+    <p class="text-muted small mt-2 mb-0">
+        Your camp group is assigned when you check in at the event (not at registration).
+    </p>
 
     <div class="mt-4 text-center">
         <?php $qrValue = $participant['qr_code'] ?? ''; ?>
